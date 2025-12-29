@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>CNN Rakam Tanıma</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<h1>🧠 CNN ile Rakam Tanıma + Feature Map + Heatmap</h1>
+
+<canvas id="canvas" width="280" height="280"></canvas>
+<br>
+<button onclick="predict()">Tahmin Et</button>
+<button onclick="clearCanvas()">Temizle</button>
+
+<h2 id="result"></h2>
+
+<h3>🧩 Feature Map'ler</h3>
+<div id="featureMaps"></div>
+
+<h3>🔥 Heatmap</h3>
+<img id="heatmap" style="width:150px; border:1px solid black;">
+
+<script src="/static/script.js"></script>
+</body>
+</html>
