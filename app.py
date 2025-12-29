@@ -1,82 +1,70 @@
 from flask import Flask, render_template, request, jsonify
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import load_model, Model
 import cv2
-import base64
+from tensorflow.keras.models import load_model, Model
+from tensorflow.keras.preprocessing.image import img_to_array
 
 app = Flask(__name__)
 
+# --------------------------
 # Modeli yükle
+# --------------------------
 model = load_model("model.h5")
 
-# Conv katmanları
-conv1_output = model.get_layer(index=0).output
-conv2_output = model.get_layer(index=2).output
+# --------------------------
+# Sequential model input'u dummy ile oluştur
+# --------------------------
+dummy_input = np.zeros((1, 28, 28, 1))  # MNIST boyutu
+_ = model(dummy_input)  # model.input tensor'u oluşur
+
+# Conv katmanlarını al
+conv1_output = model.layers[0].output
+conv2_output = model.layers[1].output
+
 activation_model = Model(inputs=model.input, outputs=[conv1_output, conv2_output])
 
-# Grad-CAM modeli
-last_conv_layer = model.get_layer(index=2)
-grad_model = Model([model.inputs], [last_conv_layer.output, model.output])
+# --------------------------
+# Helper: Feature Map -> Heatmap
+# --------------------------
+def get_activation_maps(img_array):
+    activations = activation_model.predict(img_array)
+    maps = []
+    for activation in activations:
+        # İlk örnekten al ve normalize et
+        act = activation[0]
+        act = np.mean(act, axis=-1)  # kanalları birleştir
+        act -= act.min()
+        act /= act.max() + 1e-6
+        act = cv2.resize(act, (28, 28))
+        maps.append(act)
+    return maps
 
+# --------------------------
+# Routes
+# --------------------------
 @app.route("/")
 def index():
     return render_template("index.html")
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    data = request.json["image"]
-    image_data = base64.b64decode(data.split(",")[1])
+    data = request.json["image"]  # frontend'den base64 vs.
+    # Örnek: base64 → array dönüşümü yapılacak, burada sadece array varsayalım
+    img = np.array(data).reshape(28, 28, 1) / 255.0
+    img = np.expand_dims(img, axis=0)
+    
+    pred = model.predict(img)
+    pred_class = int(np.argmax(pred, axis=1)[0])
 
-    img = np.frombuffer(image_data, np.uint8)
-    img = cv2.imdecode(img, cv2.IMREAD_GRAYSCALE)
-    img = cv2.resize(img, (28, 28))
-    img = img / 255.0
-    img_input = img.reshape(1,28,28,1)
+    heatmaps = get_activation_maps(img)
+    heatmaps_list = [hm.tolist() for hm in heatmaps]  # JSON için
 
-    # Tahmin
-    preds = model.predict(img_input)
-    digit = int(np.argmax(preds))
+    return jsonify({"prediction": pred_class, "heatmaps": heatmaps_list})
 
-    # Feature map
-    activations = activation_model.predict(img_input)
-    feature_maps = []
-    layer_names = ["Conv1", "Conv2"]
-    for l_idx, layer_activation in enumerate(activations):
-        maps_for_layer = []
-        for i in range(min(6, layer_activation.shape[-1])):
-            fm = layer_activation[0,:,:,i]
-            fm -= fm.min()
-            fm /= (fm.max()+1e-5)
-            fm = np.uint8(fm*255)
-            _, buffer = cv2.imencode(".png", fm)
-            maps_for_layer.append(base64.b64encode(buffer).decode("utf-8"))
-        feature_maps.append({"layer": layer_names[l_idx], "maps": maps_for_layer})
-
-    # Grad-CAM
-    with tf.GradientTape() as tape:
-        last_conv_out, pred = grad_model(img_input)
-        class_idx = np.argmax(pred)
-        loss = pred[:, class_idx]
-    grads = tape.gradient(loss, last_conv_out)
-    pooled_grads = tf.reduce_mean(grads, axis=(0,1,2))
-    last_conv_out = last_conv_out[0]
-    for i in range(last_conv_out.shape[-1]):
-        last_conv_out[:,:,i] *= pooled_grads[i]
-    heatmap = np.mean(last_conv_out, axis=-1)
-    heatmap = np.maximum(heatmap,0)
-    heatmap /= (heatmap.max()+1e-5)
-    heatmap = cv2.resize(heatmap.numpy(), (28,28))
-    heatmap = np.uint8(255*heatmap)
-    heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-    _, buffer = cv2.imencode(".png", heatmap_color)
-    heatmap_base64 = base64.b64encode(buffer).decode("utf-8")
-
-    return jsonify({
-        "digit": digit,
-        "feature_maps": feature_maps,
-        "heatmap": heatmap_base64
-    })
-
+# --------------------------
+# Render için port ayarı
+# --------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
